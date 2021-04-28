@@ -1,5 +1,6 @@
+
 #--------------------------------------------------------
-# Globals
+# Packages, global variables
 #--------------------------------------------------------
 
 rm(list=ls())     # remove previous objects from workspace
@@ -12,43 +13,24 @@ library(xtable)
 figdir <- '../plots/'
 
 #------------------------------------------------------------
-# helper functions
+# Helper functions
 #------------------------------------------------------------
 
-# summarySE()
+# conf_summary()
 # partially based on: http://www.cookbook-r.com/Manipulating_data/Summarizing_data/
-
-## Summarizes data.
-## Gives count, mean, standard deviation, standard error of the mean, and confidence 
-## interval (default 95%).
-##   data: a data frame.
-##   measurevar: the name of a column that contains the variable to be summariezed
-##   groupvars: a vector containing names of columns that contain grouping variables
-##   na.rm: a boolean that indicates whether to ignore NA's
-##   conf.interval: the percent range of the confidence interval (default is 95%)
-
-summarySE <- function(data, measurevar, groupvars, conf.interval=.95) {
-  
-  # Mean by groups
-  datac <- data %>% 
-    mutate_(measurevar = measurevar) %>% 
-    group_by_(.dots = groupvars) %>%
-    summarise(mean = mean(measurevar, na.rm = T), sd = sd(measurevar, na.rm = T), N = n()) %>% 
+# group data, and calculate: mean, standard error, 95% confidence interval
+conf_summary <- function(data, measurevar, ...) {
+  d %>% 
+    group_by(...) %>%
+    summarise(mean = mean({{measurevar}}, na.rm = T),
+              sd = sd({{measurevar}}, na.rm = T),
+              N = n(),
+              se = sd / sqrt(N),
+              ci = se * qt(0.95/2 + .5, N-1)) %>% 
     ungroup()
-  datac[,measurevar] <- datac$mean
-  
-  # Calculate standard error of the mean
-  datac$se <- datac$sd / sqrt(datac$N)
-  
-  # Confidence interval multiplier for standard error
-  ciMult <- qt(conf.interval/2 + .5, datac$N-1)
-  datac$ci <- datac$se * ciMult
-  
-  return(datac)
 }
 
 # save plots with cairo
-
 ggsave.alt <- function(plot.lst = list(last_plot()), custom.name = "lastplot",
                        height = fh, width = fw, figscale = 1, ...) {
   if (is.null(names(plot.lst))) names(plot.lst) <- custom.name
@@ -80,15 +62,15 @@ ggplot(d) + aes(x = relRT, fill = condition, colour = condition) +
 ggplot(d) + aes(x = zRT, fill = condition, colour = condition) +
   geom_density(alpha = .5)
 
-summarySE(d, "relRT", groupvars = "condition")
-summarySE(d, "zRT", "condition")
+conf_summary(d, relRT, condition)
+conf_summary(d, zRT, condition)
 
 #--------------------------------------------------------
-# By probe
+# RT responses by probe
 #--------------------------------------------------------
 
 ## Summary by probe
-dsum2 <- summarySE(d, "zRT", c("probe"))
+dsum2 <- conf_summary(d, zRT, probe)
 ggplot(dsum2) + aes(x = factor(probe), y = mean, group = 1) +
   geom_point() + geom_line() +
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
@@ -97,7 +79,7 @@ ggplot(dsum2) + aes(x = factor(probe), y = mean, group = 1) +
 # ggsave("dsum_all.pdf", scale = 2)
 
 ## Summary by probe and condition
-dsum <- summarySE(d, "zRT", c("probe", "condition"))
+dsum <- conf_summary(d, zRT, probe, condition)
 ggplot(dsum) + aes(x = factor(probe), y = mean, group = condition, color = condition) +
   geom_point() + geom_line() +
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
@@ -118,7 +100,7 @@ ggplot(dsum) + aes(x = factor(probe), y = mean, group = condition) +
 dsum.stat <- dsum %>% 
   mutate(condition = paste("Condition", condition)) %>% 
   group_by(condition) %>% 
-  summarise(r = cor(probe, zRT) %>% round(2)) %>% 
+  summarise(r = cor(probe, mean) %>% round(2)) %>% 
   mutate(highlight = condition)
 
 # with hihglight
