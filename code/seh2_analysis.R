@@ -9,8 +9,7 @@ library(tidyverse)
 theme_set(theme_bw()) # ggplot theme
 library(lmerTest)
 library(xtable)
-
-figdir <- '../plots/'
+library(cowplot)
 
 #------------------------------------------------------------
 # Helper functions
@@ -32,11 +31,13 @@ conf_summary <- function(data, measurevar, ...) {
 
 # save plots with cairo
 ggsave.alt <- function(plot.lst = list(last_plot()), custom.name = "lastplot",
-                       height = fh, width = fw, figscale = 1, ...) {
+                       height = fh, width = fw, figscale = 1,
+                       figdir = '../plots/',
+                       device = cairo_pdf, device_suffix = 'pdf', ...) {
   if (is.null(names(plot.lst))) names(plot.lst) <- custom.name
-  plot.names <- paste0(names(plot.lst), ".pdf")
+  plot.names <- paste0(figdir, names(plot.lst), '.', device_suffix)
   pmap(list(plot.names, plot.lst), ggsave,
-       device=cairo_pdf, scale = figscale,
+       device = device, scale = figscale,
        height = height, width = width, ...)
 }
 
@@ -44,8 +45,16 @@ ggsave.alt <- function(plot.lst = list(last_plot()), custom.name = "lastplot",
 # Load data
 #--------------------------------------------------------
 
+# semantic labels for conditions
+condlabels <- tibble(condition = c(1, 2, 3),
+                     condition_label = c('Cond. 1: constant IOI & ISI',
+                                         'Cond. 2: variable ISI',
+                                         'Cond. 3: variable IOI'))
+
+# read response data
 d <- read_csv('../data/seh2_response_data.csv') %>% 
-  mutate(condition = as.factor(condition))
+  left_join(condlabels) %>% 
+  mutate(condition = as_factor(condition))
 
 #--------------------------------------------------------
 # Distributions
@@ -56,17 +65,17 @@ d <- read_csv('../data/seh2_response_data.csv') %>%
 # Condition 3: Lenovo T440s, Ubuntu 15.10.
 # RTs are consistently shorter for condition 3.
 
-ggplot(d) + aes(x = relRT, fill = condition, colour = condition) +
+ggplot(d) + aes(x = relRT, fill = condition_label, colour = condition_label) +
   geom_density(alpha = .5)
 
-ggplot(d) + aes(x = zRT, fill = condition, colour = condition) +
+ggplot(d) + aes(x = zRT, fill = condition_label, colour = condition_label) +
   geom_density(alpha = .5)
 
-conf_summary(d, relRT, condition)
-conf_summary(d, zRT, condition)
+conf_summary(d, relRT, condition_label)
+conf_summary(d, zRT, condition_label)
 
 #--------------------------------------------------------
-# RT responses by probe
+# RTs by probe
 #--------------------------------------------------------
 
 ## Summary by probe
@@ -79,8 +88,10 @@ ggplot(dsum2) + aes(x = factor(probe), y = mean, group = 1) +
 # ggsave("dsum_all.pdf", scale = 2)
 
 ## Summary by probe and condition
-dsum <- conf_summary(d, zRT, probe, condition)
-ggplot(dsum) + aes(x = factor(probe), y = mean, group = condition, color = condition) +
+dsum <- conf_summary(d, zRT, probe, condition_label) %>% 
+  rename(condition = condition_label)
+ggplot(dsum) + aes(x = factor(probe), y = mean,
+                   group = condition, color = condition) +
   geom_point() + geom_line() +
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
   labs(x = "Position of probe within sequence",
@@ -93,19 +104,18 @@ ggplot(dsum) + aes(x = factor(probe), y = mean, group = condition) +
   facet_wrap(~ condition) +
   labs(x = "Position of probe within sequence",
        y = "Normalised reaction time (z)") +
-  theme(legend.position="none")
+  theme(legend.position="none") +
+  theme_cowplot()
 # ggsave(paste0(figdir, "dsum_conditions2.pdf"), width = 10, height = 6)
 
 # summary statistics (for plot overlay)
 dsum.stat <- dsum %>% 
-  mutate(condition = paste("Condition", condition)) %>% 
   group_by(condition) %>% 
   summarise(r = cor(probe, mean) %>% round(2)) %>% 
   mutate(highlight = condition)
 
 # with hihglight
 dsum %>% 
-  mutate(condition = paste("Condition", condition)) %>% 
   crossing(highlight = unique(.$condition)) %>%
   ggplot() +
   aes(x = factor(probe), y = mean, group = condition,
@@ -116,11 +126,15 @@ dsum %>%
   labs(x = "Position of probe within sequence",
        y = "Normalised reaction time (z)") +
   facet_wrap(~highlight) +
-  scale_alpha_discrete(range = c(.2, 1)) +
-  theme(legend.position="none") +
+  scale_alpha_discrete(range = c(.1, 1)) +
   geom_text(aes(x = 7, y = 1.1, label = paste0("italic(r) == ", r)), parse = T, 
-            data = dsum.stat)
-# ggsave.alt(custom.name = "dsum_conditions3", width = 7.5, height = 5)
+            data = dsum.stat) +
+  theme_cowplot() +
+  theme(legend.position="none")
+
+ggsave.alt(custom.name = "dsum_conditions3", width = 7.5, height = 5)
+ggsave.alt(custom.name = "dsum_conditions3", width = 7.5, height = 5,
+           device = 'jpeg', device_suffix = 'jpg')
 
 #--------------------------------------------------------
 # mixed models
@@ -150,6 +164,8 @@ summary(mm3)
 mm3.null <- lmer(zRT ~ probe.dist + probe + condition + (1 + probe | subjectID),
                  d, REML = T)
 anova(mm3, mm3.null)
+
+#--------------------------------------------------------
 
 print(xtable(summary(mm3)$coefficients, digits = 4),
       scalebox = '.8', include.rownames = T, booktabs = T)
