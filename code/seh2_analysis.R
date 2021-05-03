@@ -3,13 +3,19 @@
 # Packages, global variables
 #--------------------------------------------------------
 
-rm(list=ls())     # remove previous objects from workspace
+# remove previous objects from workspace
+rm(list=ls())
 
 library(tidyverse)
-theme_set(theme_bw()) # ggplot theme
-library(lmerTest)
-library(xtable)
 library(cowplot)
+library(lmerTest)
+library(broom.mixed)
+library(gtools)
+library(xtable)
+library(kableExtra)
+
+# set default ggplot theme
+theme_set(theme_bw())
 
 #------------------------------------------------------------
 # Helper functions
@@ -30,15 +36,28 @@ conf_summary <- function(data, measurevar, ...) {
 }
 
 # save plots with cairo
-ggsave.alt <- function(plot.lst = list(last_plot()), custom.name = "lastplot",
+ggsave_alt <- function(plot_lst = list(last_plot()), custom_name = "lastplot",
                        height = fh, width = fw, figscale = 1,
                        figdir = '../plots/',
                        device = cairo_pdf, device_suffix = 'pdf', ...) {
-  if (is.null(names(plot.lst))) names(plot.lst) <- custom.name
-  plot.names <- paste0(figdir, names(plot.lst), '.', device_suffix)
-  pmap(list(plot.names, plot.lst), ggsave,
+  if (is.null(names(plot_lst))) names(plot_lst) <- custom_name
+  plot_names <- paste0(figdir, names(plot_lst), '.', device_suffix)
+  pmap(list(plot_names, plot_lst), ggsave,
        device = device, scale = figscale,
        height = height, width = width, ...)
+}
+
+# print fixed effects of mixed model
+print_model <- function(mx) {
+  mx %>% 
+    tidy(effects = 'fixed') %>% 
+    mutate(signif = stars.pval(p.value),
+           t.value = statistic,
+           p.value = format.pval(p.value, digits = 2),
+           term = str_replace_all(term, 'probe.dist', 'probe.distance')) %>% 
+    mutate_if(is.numeric, ~ round(., digits = 2)) %>% 
+    select(term, estimate, std.error, t.value, p.value, signif) %>% 
+    kable(format = 'latex', booktabs = T, linesep = "")
 }
 
 #--------------------------------------------------------
@@ -68,10 +87,14 @@ d <- read_csv('../data/seh2_response_data.csv') %>%
 ggplot(d) + aes(x = relRT, fill = condition_label, colour = condition_label) +
   geom_density(alpha = .5)
 
+ggplot(d) + aes(x = logRT, fill = condition_label, colour = condition_label) +
+  geom_density(alpha = .5)
+
 ggplot(d) + aes(x = zRT, fill = condition_label, colour = condition_label) +
   geom_density(alpha = .5)
 
 conf_summary(d, relRT, condition_label)
+conf_summary(d, logRT, condition_label)
 conf_summary(d, zRT, condition_label)
 
 #--------------------------------------------------------
@@ -95,8 +118,13 @@ ggplot(dsum) + aes(x = factor(probe), y = mean,
   geom_point() + geom_line() +
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
   labs(x = "Position of probe within sequence",
-       y = "Normalised reaction time (z)")
+       y = "Normalised reaction time (z)") +
+  theme_cowplot()
 # ggsave("dsum_conditions.pdf", scale = 2)
+
+#--------------------------------------------------------
+# z-transformed RTs by probe (with overlay)
+#--------------------------------------------------------
 
 ggplot(dsum) + aes(x = factor(probe), y = mean, group = condition) +
   geom_point() + geom_line() +
@@ -132,43 +160,91 @@ dsum %>%
   theme_cowplot() +
   theme(legend.position="none")
 
-ggsave.alt(custom.name = "dsum_conditions3", width = 7.5, height = 5)
-ggsave.alt(custom.name = "dsum_conditions3", width = 7.5, height = 5,
+ggsave_alt(custom_name = "dsum_conditions3", width = 7.5, height = 5)
+ggsave_alt(custom_name = "dsum_conditions3", width = 7.5, height = 5,
            device = 'jpeg', device_suffix = 'jpg')
 
 #--------------------------------------------------------
-# mixed models
+# log-transformed RTs by probe (with overlay)
 #--------------------------------------------------------
 
-# probe + probe.dist
-mm1 <- lmer(zRT ~ probe + probe.dist + (1 + probe | subjectID),
-            d, REML = F)
-summary(mm1)
-mm1.null <- lmer(zRT ~ probe.dist + (1 + probe | subjectID),
-                 d, REML = T)
-anova(mm1, mm1.null)
+## Summary by probe and condition
+log_sum <- conf_summary(d, logRT, probe, condition_label) %>% 
+  rename(condition = condition_label)
 
-# probe + probe.dist + condition
-mm2 <- lmer(zRT ~ probe + probe.dist + condition + (1 + probe | subjectID),
-            d, REML = F)
-summary(mm2)
-mm2.null <- lmer(zRT ~ probe + probe.dist + (1 + probe | subjectID),
-                 d, REML = T)
-anova(mm2, mm2.null)
+ggplot(log_sum) + aes(x = factor(probe), y = mean, group = condition) +
+  geom_point() + geom_line() +
+  geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
+  facet_wrap(~ condition) +
+  labs(x = "Position of probe within sequence",
+       y = "log-transformed reaction time") +
+  theme(legend.position="none") +
+  theme_cowplot()
+# ggsave(paste0(figdir, "dsum_conditions2.pdf"), width = 10, height = 6)
 
-# probe + probe.dist + condition*probe
-mm3 <- lmer(zRT ~ probe.dist + probe + condition + (probe*condition) +
-              (1 + probe | subjectID),
-            d, REML = F)
-summary(mm3)
-mm3.null <- lmer(zRT ~ probe.dist + probe + condition + (1 + probe | subjectID),
-                 d, REML = T)
-anova(mm3, mm3.null)
+# summary statistics (for plot overlay)
+log_sum_stat <- log_sum %>% 
+  group_by(condition) %>% 
+  summarise(r = cor(probe, mean) %>% round(2)) %>% 
+  mutate(highlight = condition)
+
+# with hihglight
+log_sum %>% 
+  crossing(highlight = unique(.$condition)) %>%
+  ggplot() +
+  aes(x = factor(probe), y = mean, group = condition,
+      alpha = highlight == condition) +
+  geom_point() + geom_line() +
+  geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
+  facet_wrap(~ condition) +
+  labs(x = "Position of probe within sequence",
+       y = "log-transformed reaction time") +
+  facet_wrap(~highlight) +
+  scale_alpha_discrete(range = c(.1, 1)) +
+  geom_text(aes(x = 7, y = 6.5, label = paste0("italic(r) == ", r)), parse = T,
+            data = log_sum_stat) +
+  theme_cowplot() +
+  theme(legend.position="none")
+
+ggsave_alt(custom_name = "d_log_conditions3", width = 7.5, height = 5)
+ggsave_alt(custom_name = "d_log_conditions3", width = 7.5, height = 5,
+           device = 'jpeg', device_suffix = 'jpg')
 
 #--------------------------------------------------------
+# regression models (zRT)
+#--------------------------------------------------------
 
-print(xtable(summary(mm3)$coefficients, digits = 4),
-      scalebox = '.8', include.rownames = T, booktabs = T)
+# saturated model
+mm_sat <- lmer(zRT ~ probe.dist + probe + condition +
+              (probe*condition) + (probe.dist*condition) +
+              (1|subjectID), d, REML = F)
 
-print(xtable(anova(mm3), digits = 4),
-      scalebox = '.8', include.rownames = T, booktabs = T)
+# model selection
+step(mm_sat)
+
+# final model
+mm_final <- lmer(zRT ~ probe.dist + probe + condition + probe:condition +
+                   (1|subjectID), d, REML = F)
+summary(mm_final)
+print_model(mm_final)
+
+#--------------------------------------------------------
+# regression models (logRT)
+#--------------------------------------------------------
+
+# saturated model
+mm_sat_log <- lmer(logRT ~ probe.dist + probe + condition +
+                 (probe*condition) + (probe.dist*condition) +
+                 (1|subjectID), d, REML = F)
+
+# model selection
+step(mm_sat_log)
+
+# final model
+mm_final_log <- lmer(logRT ~ probe.dist + probe + condition + probe:condition +
+                   (1|subjectID), d, REML = F)
+summary(mm_final_log)
+print_model(mm_final_log)
+
+
+
