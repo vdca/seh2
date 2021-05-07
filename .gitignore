@@ -1,4 +1,7 @@
 plots
-*.rds
 hidden*
+data/raw
+*.rds
 *Rhistory
+code/seh2_tidy.R
+code/seh2_ITI.R

@@ -11,11 +11,7 @@ library(cowplot)
 library(lmerTest)
 library(broom.mixed)
 library(gtools)
-library(xtable)
 library(kableExtra)
-
-# set default ggplot theme
-theme_set(theme_bw())
 
 #------------------------------------------------------------
 # Helper functions
@@ -35,9 +31,9 @@ conf_summary <- function(data, measurevar, ...) {
     ungroup()
 }
 
-# save plots with cairo
-ggsave_alt <- function(plot_lst = list(last_plot()), custom_name = "lastplot",
-                       height = fh, width = fw, figscale = 1,
+# save plots with cairo pdf device
+ggsave_pdf <- function(custom_name = "lastplot", plot_lst = list(last_plot()),
+                       height = 5, width = 7.5, figscale = 1,
                        figdir = '../plots/',
                        device = cairo_pdf, device_suffix = 'pdf', ...) {
   if (is.null(names(plot_lst))) names(plot_lst) <- custom_name
@@ -45,6 +41,10 @@ ggsave_alt <- function(plot_lst = list(last_plot()), custom_name = "lastplot",
   pmap(list(plot_names, plot_lst), ggsave,
        device = device, scale = figscale,
        height = height, width = width, ...)
+}
+
+ggsave_jpg <- function(custom_name = "lastplot", ...) {
+  ggsave_pdf(device = 'jpeg', device_suffix = 'jpg', custom_name, ...)
 }
 
 # print fixed effects of mixed model
@@ -73,25 +73,61 @@ condlabels <- tibble(condition = c(1, 2, 3),
 # read response data
 d <- read_csv('../data/seh2_response_data.csv') %>% 
   left_join(condlabels) %>% 
-  mutate(condition = as_factor(condition))
+  mutate(condition = as_factor(condition)) %>% 
+  group_by(condition) %>% 
+  mutate(zRT = scale(logRT),
+         stdRT = scale(relRT)) %>% 
+  ungroup()
 
 #--------------------------------------------------------
 # Distributions
 #--------------------------------------------------------
 
+# themes for distribution plots.
+# legend.justification = inside reference point for legend.position 
+theme_dist <- list(theme_cowplot(),
+                   theme(legend.title = element_blank(),
+                         legend.position = c(1, 1),
+                         legend.justification = c('right', 'top')))
+theme_dist_nolegend <- list(theme_cowplot(),
+                            theme(legend.position = 'none'))
+
 # Conditions were conducted on different machines:
-# Conditions 1 and 2: Dell XPS M1330, Ubuntu 12.04.
+# Condition 1: Dell XPS M1330, Ubuntu 12.04.
+# Condition 2: Dell XPS M1330, Ubuntu 12.04.
 # Condition 3: Lenovo T440s, Ubuntu 15.10.
 # RTs are consistently shorter for condition 3.
+# Hence, z-normalise RTs to make conditions comparable.
 
-ggplot(d) + aes(x = relRT, fill = condition_label, colour = condition_label) +
-  geom_density(alpha = .5)
+dist_rt <- ggplot(d) +
+  aes(x = relRT, fill = condition_label, colour = condition_label) +
+  geom_density(alpha = .5) +
+  theme_dist + xlab('reaction time (ms)')
+dist_rt
 
-ggplot(d) + aes(x = logRT, fill = condition_label, colour = condition_label) +
-  geom_density(alpha = .5)
+dist_logrt <- ggplot(d) +
+  aes(x = logRT, fill = condition_label, colour = condition_label) +
+  geom_density(alpha = .5) +
+  theme_dist_nolegend + xlab('reaction time (log-transformed)')
+dist_logrt
 
-ggplot(d) + aes(x = zRT, fill = condition_label, colour = condition_label) +
-  geom_density(alpha = .5)
+dist_stdrt <- ggplot(d) +
+  aes(x = stdRT, fill = condition_label, colour = condition_label) +
+  geom_density(alpha = .5) +
+  theme_dist_nolegend + xlab('reaction time (z-normalised)')
+dist_stdrt
+
+dist_zrt <- ggplot(d) +
+  aes(x = zRT, fill = condition_label, colour = condition_label) +
+  geom_density(alpha = .5) +
+  theme_dist_nolegend + xlab('reaction time (log-transformed, z-normalised)')
+dist_zrt
+
+plot_grid(dist_rt, dist_zrt, ncol = 1, labels = 'AUTO')
+ggsave_jpg('rt_distributions_2', height = 9)
+
+plot_grid(dist_rt, dist_logrt, dist_zrt, ncol = 1, labels = 'AUTO')
+ggsave_jpg('rt_distributions_3', height = 9)
 
 conf_summary(d, relRT, condition_label)
 conf_summary(d, logRT, condition_label)
@@ -101,13 +137,17 @@ conf_summary(d, zRT, condition_label)
 # RTs by probe
 #--------------------------------------------------------
 
+# axis labels
+probe_lab <- 'position of probe within sequence'
+zrt_lab <- 'reaction time (log-transformed, z-normalised)'
+lrt_lab <- 'reaction time (log-transformed)'
+
 ## Summary by probe
 dsum2 <- conf_summary(d, zRT, probe)
 ggplot(dsum2) + aes(x = factor(probe), y = mean, group = 1) +
   geom_point() + geom_line() +
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
-  labs(x = "Position of probe within sequence",
-       y = "Normalised reaction time (z)")
+  labs(x = probe_lab, y = zrt_lab)
 # ggsave("dsum_all.pdf", scale = 2)
 
 ## Summary by probe and condition
@@ -117,30 +157,35 @@ ggplot(dsum) + aes(x = factor(probe), y = mean,
                    group = condition, color = condition) +
   geom_point() + geom_line() +
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
-  labs(x = "Position of probe within sequence",
-       y = "Normalised reaction time (z)") +
-  theme_cowplot()
+  labs(x = probe_lab, y = zrt_lab) +
+  theme_cowplot() +
+  theme(legend.title = element_blank())
 # ggsave("dsum_conditions.pdf", scale = 2)
 
 #--------------------------------------------------------
-# z-transformed RTs by probe (with overlay)
+# log-transformed, z-normalised RTs by probe (with overlay)
 #--------------------------------------------------------
-
-ggplot(dsum) + aes(x = factor(probe), y = mean, group = condition) +
-  geom_point() + geom_line() +
-  geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
-  facet_wrap(~ condition) +
-  labs(x = "Position of probe within sequence",
-       y = "Normalised reaction time (z)") +
-  theme(legend.position="none") +
-  theme_cowplot()
-# ggsave(paste0(figdir, "dsum_conditions2.pdf"), width = 10, height = 6)
 
 # summary statistics (for plot overlay)
 dsum.stat <- dsum %>% 
   group_by(condition) %>% 
-  summarise(r = cor(probe, mean) %>% round(2)) %>% 
+  summarise(r = cor(probe, mean) %>% round(3)) %>% 
   mutate(highlight = condition)
+
+# no highlight
+dsum %>% 
+  ggplot() + aes(x = factor(probe), y = mean, group = condition) +
+  geom_point() + geom_line() +
+  geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
+  facet_wrap(~ condition) +
+  labs(x = probe_lab, y = zrt_lab) +
+  theme(legend.position="none") +
+  geom_text(aes(x = 7, y = 1.1, label = paste0("italic(r) == ", r)), parse = T, 
+            data = dsum.stat, inherit.aes = F) +
+  theme_cowplot() +
+  background_grid(major = 'y')
+
+ggsave_jpg(custom_name = "zrt_conditions", width = 9)
 
 # with hihglight
 dsum %>% 
@@ -151,42 +196,43 @@ dsum %>%
   geom_point() + geom_line() +
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
   facet_wrap(~ condition) +
-  labs(x = "Position of probe within sequence",
-       y = "Normalised reaction time (z)") +
+  labs(x = probe_lab, y = zrt_lab) +
   facet_wrap(~highlight) +
   scale_alpha_discrete(range = c(.1, 1)) +
   geom_text(aes(x = 7, y = 1.1, label = paste0("italic(r) == ", r)), parse = T, 
-            data = dsum.stat) +
+            data = dsum.stat, inherit.aes = F) +
   theme_cowplot() +
-  theme(legend.position="none")
+  background_grid(major = 'y') +
+  theme(legend.position = 'none')
 
-ggsave_alt(custom_name = "dsum_conditions3", width = 7.5, height = 5)
-ggsave_alt(custom_name = "dsum_conditions3", width = 7.5, height = 5,
-           device = 'jpeg', device_suffix = 'jpg')
+ggsave_jpg(custom_name = "zrt_conditions_hi", width = 9)
 
 #--------------------------------------------------------
 # log-transformed RTs by probe (with overlay)
 #--------------------------------------------------------
 
-## Summary by probe and condition
+## summary by probe and condition
 log_sum <- conf_summary(d, logRT, probe, condition_label) %>% 
   rename(condition = condition_label)
-
-ggplot(log_sum) + aes(x = factor(probe), y = mean, group = condition) +
-  geom_point() + geom_line() +
-  geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
-  facet_wrap(~ condition) +
-  labs(x = "Position of probe within sequence",
-       y = "log-transformed reaction time") +
-  theme(legend.position="none") +
-  theme_cowplot()
-# ggsave(paste0(figdir, "dsum_conditions2.pdf"), width = 10, height = 6)
 
 # summary statistics (for plot overlay)
 log_sum_stat <- log_sum %>% 
   group_by(condition) %>% 
-  summarise(r = cor(probe, mean) %>% round(2)) %>% 
+  summarise(r = cor(probe, mean) %>% round(3)) %>% 
   mutate(highlight = condition)
+
+# no highlight
+ggplot(log_sum) + aes(x = factor(probe), y = mean, group = condition) +
+  geom_point() + geom_line() +
+  geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
+  geom_text(aes(x = 7, y = 6.5, label = paste0("italic(r) == ", r)),
+            parse = T, data = log_sum_stat) +
+  facet_wrap(~ condition) +
+  labs(x = probe_lab, y = lrt_lab) +
+  theme_cowplot() +
+  background_grid(major = 'y')
+
+ggsave_jpg(custom_name = "logrt_conditions", width = 9)
 
 # with hihglight
 log_sum %>% 
@@ -197,18 +243,16 @@ log_sum %>%
   geom_point() + geom_line() +
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
   facet_wrap(~ condition) +
-  labs(x = "Position of probe within sequence",
-       y = "log-transformed reaction time") +
+  labs(x = probe_lab, y = lrt_lab) +
   facet_wrap(~highlight) +
   scale_alpha_discrete(range = c(.1, 1)) +
-  geom_text(aes(x = 7, y = 6.5, label = paste0("italic(r) == ", r)), parse = T,
-            data = log_sum_stat) +
+  geom_text(aes(x = 7, y = 6.5, label = paste0("italic(r) == ", r)),
+            parse = T, data = log_sum_stat) +
   theme_cowplot() +
+  background_grid(major = 'y') +
   theme(legend.position="none")
 
-ggsave_alt(custom_name = "d_log_conditions3", width = 7.5, height = 5)
-ggsave_alt(custom_name = "d_log_conditions3", width = 7.5, height = 5,
-           device = 'jpeg', device_suffix = 'jpg')
+ggsave_jpg(custom_name = "logrt_conditions_hi", width = 9)
 
 #--------------------------------------------------------
 # regression models (zRT)
@@ -216,14 +260,15 @@ ggsave_alt(custom_name = "d_log_conditions3", width = 7.5, height = 5,
 
 # saturated model
 mm_sat <- lmer(zRT ~ probe.dist + probe + condition +
-              (probe*condition) + (probe.dist*condition) +
+              probe:condition + probe.dist:condition +
               (1|subjectID), d, REML = F)
+summary(mm_sat)
 
 # model selection
 step(mm_sat)
 
-# final model
-mm_final <- lmer(zRT ~ probe.dist + probe + condition + probe:condition +
+# step-selected final model
+mm_final <- lmer(zRT ~ probe.dist + probe +
                    (1|subjectID), d, REML = F)
 summary(mm_final)
 print_model(mm_final)
@@ -234,8 +279,9 @@ print_model(mm_final)
 
 # saturated model
 mm_sat_log <- lmer(logRT ~ probe.dist + probe + condition +
-                 (probe*condition) + (probe.dist*condition) +
+                 probe:condition + probe.dist:condition +
                  (1|subjectID), d, REML = F)
+summary(mm_sat_log)
 
 # model selection
 step(mm_sat_log)
