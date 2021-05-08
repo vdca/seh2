@@ -1,20 +1,22 @@
 
 #--------------------------------------------------------
-# Packages, global variables
+# packages, global variables
 #--------------------------------------------------------
 
 # remove previous objects from workspace
 rm(list=ls())
 
 library(tidyverse)
+library(skimr)
 library(cowplot)
+theme_set(theme_cowplot())
 library(lmerTest)
 library(broom.mixed)
 library(gtools)
 library(kableExtra)
 
 #------------------------------------------------------------
-# Helper functions
+# helper functions
 #------------------------------------------------------------
 
 # conf_summary()
@@ -54,43 +56,158 @@ print_model <- function(mx) {
     mutate(signif = stars.pval(p.value),
            t.value = statistic,
            p.value = format.pval(p.value, digits = 2),
-           term = str_replace_all(term, 'probe.dist', 'probe.distance')) %>% 
+           term = str_replace_all(term, 'preceding_stds', 'preceding_standards')) %>% 
     mutate_if(is.numeric, ~ round(., digits = 2)) %>% 
     select(term, estimate, std.error, t.value, p.value, signif) %>% 
     kable(format = 'latex', booktabs = T, linesep = "")
 }
 
 #--------------------------------------------------------
-# Load data
+# load data
 #--------------------------------------------------------
 
-# semantic labels for conditions
+# semantic labels for conditions.
+# machine (hard/soft-ware) for conditions.
 condlabels <- tibble(condition = c(1, 2, 3),
                      condition_label = c('Cond. 1: constant IOI & ISI',
                                          'Cond. 2: variable ISI',
-                                         'Cond. 3: variable IOI'))
+                                         'Cond. 3: variable IOI'),
+                     machine = c('dell_ubuntu12',
+                                 'dell_ubuntu12',
+                                 'lenovo_ubuntu15'))
 
-# read response data
-d <- read_csv('../data/seh2_response_data.csv') %>% 
+# read all response data (including misses, false alarms, etc.)
+alld <- read_tsv('../data/seh2_response_data.tsv') %>% 
   left_join(condlabels) %>% 
-  mutate(condition = as_factor(condition)) %>% 
-  group_by(condition) %>% 
-  mutate(zRT = scale(logRT),
-         stdRT = scale(relRT)) %>% 
+  mutate(condition = as_factor(condition))
+
+#--------------------------------------------------------
+# exclude block-initial trials
+#--------------------------------------------------------
+
+# remove all block-initial trials,
+# since the experiment didn't control that each block started
+# with a filler trial (i.e. with no deviants in it).
+# trials are numbered from 1 to 76 (col=itemID):
+# 1:4 belong to training block,
+# 5:40 (n=36) belong to experimental block 1
+# 41:76 (n=36) belong to experimental block 2.
+# hence, remove trials 5 and 41 from dataset.
+alld %>% 
+  group_by(section) %>% 
+  filter(itemID == min(itemID)) %>% 
+  count(itemID)
+
+alld <- alld %>% 
+  group_by(section) %>% 
+  filter(itemID != min(itemID)) %>% 
   ungroup()
 
 #--------------------------------------------------------
-# Distributions
+# overall accuracy; exclude low-performance participants
+#--------------------------------------------------------
+
+# compute hits, overreactions, misses, false alarms.
+# coding:
+# n_reactions = 0 = missed deviants
+# n_reactions = 1 = hits
+# n_reactions > 1 = overreactions, multiple reactions to single deviant
+# n_reactions = 99 (arbitrary code; when deviant absent) = false alarm
+alld <- alld %>% 
+  group_by(subjectID, itemID) %>% 
+  nest() %>% 
+  mutate(n_reactions = map_dbl(data, nrow)) %>%
+  unnest(data) %>% 
+  ungroup() %>%
+  mutate(n_reactions = if_else(is.na(relRT), 0, n_reactions),
+         n_reactions = if_else(is.na(deviant), -1, n_reactions), # arbitrary code for false alarms
+         response_type = if_else(n_reactions==-1, 'false_alarm', 'undefined!'),
+         response_type = if_else(n_reactions>1, 'overreaction', response_type),
+         response_type = if_else(n_reactions==1, 'hit', response_type),
+         response_type = if_else(n_reactions==0, 'miss', response_type))
+
+# summary of hits, overreactions, misses, false alarms.
+alld %>% 
+  count(response_type) %>% 
+  mutate(total = sum(n),
+         p = (n/total*100) %>% round(0))
+
+# proportion of response type by subject
+hits_by_subj <- alld %>% 
+  group_by(condition, subjectID) %>% 
+  count(response_type) %>% 
+  mutate(total = sum(n),
+         p = (n/total*100) %>% round(0)) %>%
+  select(subjectID, response_type, p) %>% 
+  pivot_wider(names_from = response_type, values_from = p)
+
+# exclude participants whose proportion of hits is below 90%
+low_performance <- hits_by_subj %>% filter(hit < 90)
+low_performance
+
+d_perform <- alld %>% 
+  filter(!subjectID %in% low_performance$subjectID)
+
+# n of participants per condition
+d_perform %>% 
+  count(condition, subjectID) %>% 
+  count(condition)
+
+#--------------------------------------------------------
+# exclude all responses except hits
+#--------------------------------------------------------
+
+d_perform %>% 
+  count(response_type) %>% 
+  mutate(total = sum(n),
+         p = (n/total*100) %>% round(0))
+
+# dataset for analyses:
+# only keep hits, i.e. deviant is present and participant reacts once;
+# exclude misses, false_alarms and trials with overreactions.
+# also exclude impossible (i.e. negative) RTs. 
+d_hits <- d_perform %>% 
+  filter(response_type == 'hit')
+
+#--------------------------------------------------------
+# exlude impossible/extreme RTs
+#--------------------------------------------------------
+
+# negative RTs are equivalent to false alarms;
+# extremely low RTs too;
+# define extreme as less/more than 2 SDs from mean;
+# (by machine, because each setup shows different RT lags)
+d_hits <- d_hits %>% 
+  group_by(machine) %>% 
+  mutate(extreme_lo = relRT < mean(relRT) - 2*sd(relRT),
+         extreme_hi = relRT > mean(relRT) + 2*sd(relRT)) %>% 
+  ungroup() %>%
+  filter(relRT > 0,
+         extreme_lo == F,
+         extreme_hi == F) %>% 
+  select(-extreme_lo, -extreme_hi)
+
+#--------------------------------------------------------
+# final dataset, add transformed RT features
+#--------------------------------------------------------
+
+d <- d_hits %>% 
+  mutate(logRT = log(relRT)) %>% 
+  group_by(machine) %>% 
+  mutate(logRT_z = scale(logRT),
+         relRT_z = scale(relRT)) %>% 
+  ungroup()
+
+#--------------------------------------------------------
+# distributions
 #--------------------------------------------------------
 
 # themes for distribution plots.
 # legend.justification = inside reference point for legend.position 
-theme_dist <- list(theme_cowplot(),
-                   theme(legend.title = element_blank(),
+theme_dist <- list(theme(legend.title = element_blank(),
                          legend.position = c(1, 1),
                          legend.justification = c('right', 'top')))
-theme_dist_nolegend <- list(theme_cowplot(),
-                            theme(legend.position = 'none'))
+theme_dist_nolegend <- list(theme(legend.position = 'none'))
 
 # Conditions were conducted on different machines:
 # Condition 1: Dell XPS M1330, Ubuntu 12.04.
@@ -112,13 +229,13 @@ dist_logrt <- ggplot(d) +
 dist_logrt
 
 dist_stdrt <- ggplot(d) +
-  aes(x = stdRT, fill = condition_label, colour = condition_label) +
+  aes(x = relRT_z, fill = condition_label, colour = condition_label) +
   geom_density(alpha = .5) +
   theme_dist_nolegend + xlab('reaction time (z-normalised)')
 dist_stdrt
 
 dist_zrt <- ggplot(d) +
-  aes(x = zRT, fill = condition_label, colour = condition_label) +
+  aes(x = logRT_z, fill = condition_label, colour = condition_label) +
   geom_density(alpha = .5) +
   theme_dist_nolegend + xlab('reaction time (log-transformed, z-normalised)')
 dist_zrt
@@ -131,58 +248,66 @@ ggsave_jpg('rt_distributions_3', height = 9)
 
 conf_summary(d, relRT, condition_label)
 conf_summary(d, logRT, condition_label)
-conf_summary(d, zRT, condition_label)
+conf_summary(d, logRT_z, condition_label)
+
+# distribution of preceding standards, i.e. distance since preceding deviant
+d %>%
+  ggplot() +
+  aes(x = preceding_stds,
+      group = condition,
+      fill = as_factor(condition),
+      colour = as_factor(condition)) +
+  geom_density(alpha = .5) +
+  theme_dist
 
 #--------------------------------------------------------
-# RTs by probe
+# RTs by position of deviant
 #--------------------------------------------------------
 
 # axis labels
-probe_lab <- 'position of probe within sequence'
+deviant_lab <- 'position of deviant within sequence'
 zrt_lab <- 'reaction time (log-transformed, z-normalised)'
 lrt_lab <- 'reaction time (log-transformed)'
 
-## Summary by probe
-dsum2 <- conf_summary(d, zRT, probe)
-ggplot(dsum2) + aes(x = factor(probe), y = mean, group = 1) +
+## Summary by deviant position
+dsum2 <- conf_summary(d, logRT_z, deviant)
+ggplot(dsum2) + aes(x = factor(deviant), y = mean, group = 1) +
   geom_point() + geom_line() +
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
-  labs(x = probe_lab, y = zrt_lab)
+  labs(x = deviant_lab, y = zrt_lab)
 # ggsave("dsum_all.pdf", scale = 2)
 
-## Summary by probe and condition
-dsum <- conf_summary(d, zRT, probe, condition_label) %>% 
+## Summary by deviant and condition
+dsum <- conf_summary(d, logRT_z, deviant, condition_label) %>% 
   rename(condition = condition_label)
-ggplot(dsum) + aes(x = factor(probe), y = mean,
+ggplot(dsum) + aes(x = factor(deviant), y = mean,
                    group = condition, color = condition) +
   geom_point() + geom_line() +
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
-  labs(x = probe_lab, y = zrt_lab) +
-  theme_cowplot() +
-  theme(legend.title = element_blank())
+  labs(x = deviant_lab, y = zrt_lab) +
+  theme_dist
 # ggsave("dsum_conditions.pdf", scale = 2)
 
 #--------------------------------------------------------
-# log-transformed, z-normalised RTs by probe (with overlay)
+# log-transformed, z-normalised RTs by deviant (with overlay)
 #--------------------------------------------------------
 
 # summary statistics (for plot overlay)
 dsum.stat <- dsum %>% 
   group_by(condition) %>% 
-  summarise(r = cor(probe, mean) %>% round(3)) %>% 
+  summarise(r = cor(deviant, mean) %>% round(2)) %>% 
   mutate(highlight = condition)
 
 # no highlight
 dsum %>% 
-  ggplot() + aes(x = factor(probe), y = mean, group = condition) +
+  ggplot() + aes(x = factor(deviant), y = mean, group = condition) +
   geom_point() + geom_line() +
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
   facet_wrap(~ condition) +
-  labs(x = probe_lab, y = zrt_lab) +
+  labs(x = deviant_lab, y = zrt_lab) +
   theme(legend.position="none") +
   geom_text(aes(x = 7, y = 1.1, label = paste0("italic(r) == ", r)), parse = T, 
             data = dsum.stat, inherit.aes = F) +
-  theme_cowplot() +
   background_grid(major = 'y')
 
 ggsave_jpg(custom_name = "zrt_conditions", width = 9)
@@ -191,45 +316,43 @@ ggsave_jpg(custom_name = "zrt_conditions", width = 9)
 dsum %>% 
   crossing(highlight = unique(.$condition)) %>%
   ggplot() +
-  aes(x = factor(probe), y = mean, group = condition,
+  aes(x = factor(deviant), y = mean, group = condition,
       alpha = highlight == condition) +
   geom_point() + geom_line() +
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
   facet_wrap(~ condition) +
-  labs(x = probe_lab, y = zrt_lab) +
+  labs(x = deviant_lab, y = zrt_lab) +
   facet_wrap(~highlight) +
   scale_alpha_discrete(range = c(.1, 1)) +
   geom_text(aes(x = 7, y = 1.1, label = paste0("italic(r) == ", r)), parse = T, 
             data = dsum.stat, inherit.aes = F) +
-  theme_cowplot() +
   background_grid(major = 'y') +
   theme(legend.position = 'none')
 
 ggsave_jpg(custom_name = "zrt_conditions_hi", width = 9)
 
 #--------------------------------------------------------
-# log-transformed RTs by probe (with overlay)
+# log-transformed RTs (not normalised by machine) by deviant (with overlay)
 #--------------------------------------------------------
 
-## summary by probe and condition
-log_sum <- conf_summary(d, logRT, probe, condition_label) %>% 
+## summary by deviant and condition
+log_sum <- conf_summary(d, logRT, deviant, condition_label) %>% 
   rename(condition = condition_label)
 
 # summary statistics (for plot overlay)
 log_sum_stat <- log_sum %>% 
   group_by(condition) %>% 
-  summarise(r = cor(probe, mean) %>% round(3)) %>% 
+  summarise(r = cor(deviant, mean) %>% round(2)) %>% 
   mutate(highlight = condition)
 
 # no highlight
-ggplot(log_sum) + aes(x = factor(probe), y = mean, group = condition) +
+ggplot(log_sum) + aes(x = factor(deviant), y = mean, group = condition) +
   geom_point() + geom_line() +
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
   geom_text(aes(x = 7, y = 6.5, label = paste0("italic(r) == ", r)),
             parse = T, data = log_sum_stat) +
   facet_wrap(~ condition) +
-  labs(x = probe_lab, y = lrt_lab) +
-  theme_cowplot() +
+  labs(x = deviant_lab, y = lrt_lab) +
   background_grid(major = 'y')
 
 ggsave_jpg(custom_name = "logrt_conditions", width = 9)
@@ -238,29 +361,28 @@ ggsave_jpg(custom_name = "logrt_conditions", width = 9)
 log_sum %>% 
   crossing(highlight = unique(.$condition)) %>%
   ggplot() +
-  aes(x = factor(probe), y = mean, group = condition,
+  aes(x = factor(deviant), y = mean, group = condition,
       alpha = highlight == condition) +
   geom_point() + geom_line() +
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
   facet_wrap(~ condition) +
-  labs(x = probe_lab, y = lrt_lab) +
+  labs(x = deviant_lab, y = lrt_lab) +
   facet_wrap(~highlight) +
   scale_alpha_discrete(range = c(.1, 1)) +
   geom_text(aes(x = 7, y = 6.5, label = paste0("italic(r) == ", r)),
             parse = T, data = log_sum_stat) +
-  theme_cowplot() +
   background_grid(major = 'y') +
   theme(legend.position="none")
 
 ggsave_jpg(custom_name = "logrt_conditions_hi", width = 9)
 
 #--------------------------------------------------------
-# regression models (zRT)
+# regression models (logRT_z)
 #--------------------------------------------------------
 
 # saturated model
-mm_sat <- lmer(zRT ~ probe.dist + probe + condition +
-              probe:condition + probe.dist:condition +
+mm_sat <- lmer(logRT_z ~ preceding_stds + deviant + condition +
+              deviant:condition + preceding_stds:condition +
               (1|subjectID), d, REML = F)
 summary(mm_sat)
 
@@ -268,7 +390,7 @@ summary(mm_sat)
 step(mm_sat)
 
 # step-selected final model
-mm_final <- lmer(zRT ~ probe.dist + probe +
+mm_final <- lmer(logRT_z ~ preceding_stds + deviant +
                    (1|subjectID), d, REML = F)
 summary(mm_final)
 print_model(mm_final)
@@ -278,8 +400,8 @@ print_model(mm_final)
 #--------------------------------------------------------
 
 # saturated model
-mm_sat_log <- lmer(logRT ~ probe.dist + probe + condition +
-                 probe:condition + probe.dist:condition +
+mm_sat_log <- lmer(logRT ~ preceding_stds + deviant + condition +
+                 deviant:condition + preceding_stds:condition +
                  (1|subjectID), d, REML = F)
 summary(mm_sat_log)
 
@@ -287,7 +409,7 @@ summary(mm_sat_log)
 step(mm_sat_log)
 
 # final model
-mm_final_log <- lmer(logRT ~ probe.dist + probe + condition + probe:condition +
+mm_final_log <- lmer(logRT ~ preceding_stds + deviant + condition +
                    (1|subjectID), d, REML = F)
 summary(mm_final_log)
 print_model(mm_final_log)
