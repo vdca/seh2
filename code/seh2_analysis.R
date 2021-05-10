@@ -10,10 +10,12 @@ library(tidyverse)
 library(skimr)
 library(cowplot)
 theme_set(theme_cowplot())
+library(ggpubr)
 library(lmerTest)
 library(broom.mixed)
 library(gtools)
 library(kableExtra)
+library(rstatix) # only for pvalue formatting (without leading zeroes)
 
 #------------------------------------------------------------
 # helper functions
@@ -53,7 +55,7 @@ ggsave_jpg <- function(custom_name = "lastplot", ...) {
 ltx_tbl <- function(mx) {
   mx %>% 
     mutate(across(where(is.numeric), ~ round(., digits = 2))) %>% 
-    kable(format = 'latex', booktabs = T, linesep = "")
+    kable(format = 'latex', booktabs = T, linesep = "", escape = T)
 }
 
 # print fixed effects of mixed model
@@ -62,14 +64,19 @@ print_model <- function(mx) {
     tidy(effects = 'fixed') %>% 
     mutate(signif = stars.pval(p.value),
            t.value = statistic,
-           p.value = format.pval(p.value, digits = 2),
-           term = str_replace_all(term, 'deviant', 'dev_position'),
-           term = str_replace_all(term, 'preceding_stds', 'dev_distance')) %>% 
+           p.value = p_format(p.value, digits = 1,
+                              accuracy = .001, leading.zero = F), # APA guidelines
+           term = str_replace_all(term, 'deviant_probability', 'dev.probability'),
+           term = str_replace_all(term, 'preceding_stds', 'dev.distance'),
+           term = str_replace_all(term, 'deviant', 'dev.position')) %>% 
     select(term, estimate, std.error, t.value, p.value, signif) %>% 
-    ltx_tbl()
+    ltx_tbl() %>% 
+    str_replace_all('signif', '') %>% 
+    str_replace_all('<', '$<$') %>% # less-than symbol is not well escaped
+    cat()
 }
 
-# themes for distribution plots.
+# themes for distribution plots
 # legend.justification = inside reference point for legend.position 
 theme_dist <- list(theme(legend.title = element_blank(),
                          legend.position = c(1, 1),
@@ -162,8 +169,13 @@ low_performance
 d_perform <- alld %>% 
   filter(!subjectID %in% low_performance$subjectID)
 
-# n of participants per condition
+# n of participants per condition (after data filtering)
 d_perform %>% 
+  count(condition, subjectID) %>% 
+  count(condition)
+
+# n of participants per condition (before data filtering)
+alld %>% 
   count(condition, subjectID) %>% 
   count(condition)
 
@@ -171,18 +183,20 @@ d_perform %>%
 # accuracy per condition
 #--------------------------------------------------------
 
-acc_cond <- d_perform %>% 
-  group_by(condition, subjectID, itemID, response_type) %>% 
+acc_cond <- d_perform %>%
+  group_by(condition_label, subjectID, itemID, response_type) %>% 
   nest() %>% 
-  group_by(condition, subjectID) %>% 
+  group_by(condition_label, subjectID) %>% 
   select(-data) %>% 
   count(response_type) %>% 
   mutate(total = sum(n),
-         p = n/total*100) %>% 
-  group_by(condition) %>% 
-  filter(response_type == 'hit') %>% 
+         p = n/total*100) %>%
+  filter(response_type == 'hit') %>%
+  group_by(condition_label) %>% 
   summarise(accuracy_mean = mean(p),
-            accuracy_sd = sd(p))
+            accuracy_sd = sd(p)) %>% 
+  ungroup()
+
 acc_cond
 
 #--------------------------------------------------------
@@ -254,16 +268,15 @@ d <- read_tsv('../data/seh2_processed_data.tsv') %>%
 #--------------------------------------------------------
 
 d %>%
-  group_by(condition) %>% 
+  group_by(condition_label) %>% 
   summarise(RT_mean = mean(relRT),
             RT_sd = sd(relRT),
             participant_n = n_distinct(subjectID),
-            accurate_RTs = n()) %>% 
+            sample_size = n()) %>% 
   ungroup() %>% 
   # summarise(across(where(is.numeric), sum)) %>% 
   left_join(acc_cond) %>% 
   ltx_tbl()
-
 
 #--------------------------------------------------------
 # distributions
@@ -301,10 +314,10 @@ dist_zrt <- ggplot(d) +
 dist_zrt
 
 plot_grid(dist_rt, dist_zrt, ncol = 1, labels = 'AUTO')
-ggsave_jpg('rt_distributions_2', height = 9)
+# ggsave_jpg('rt_distributions_2', height = 9)
 
 plot_grid(dist_rt, dist_logrt, dist_zrt, ncol = 1, labels = 'AUTO')
-ggsave_jpg('rt_distributions_3', height = 9)
+# ggsave_jpg('rt_distributions_3', height = 9)
 
 conf_summary(d, relRT, condition_label)
 conf_summary(d, logRT, condition_label)
@@ -336,10 +349,10 @@ d %>%
   summarise(across(preceding_stds, list(mean=mean, sd=sd)))
 
 # correlation between deviant position and preceding_stds
-cor(d$deviant, d$preceding_stds)
+cor.test(d$deviant, d$preceding_stds)
 
 # correlation between preceding_stds and RT
-cor(d$preceding_stds, d$logRT_z)
+cor.test(d$preceding_stds, d$logRT_z)
 
 #--------------------------------------------------------
 # RTs by position of deviant
@@ -386,12 +399,11 @@ dsum %>%
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
   facet_wrap(~ condition) +
   labs(x = deviant_lab, y = zrt_lab) +
-  theme(legend.position="none") +
-  geom_text(aes(x = 7, y = 1.1, label = paste0("italic(r) == ", r)), parse = T, 
-            data = dsum.stat, inherit.aes = F) +
+  stat_cor(p.accuracy = .001, label.x = 4, label.y = 1.1) +
+  theme_pubr(legend = 'none') +
   background_grid(major = 'y')
 
-ggsave_jpg(custom_name = "zrt_conditions", width = 9)
+# ggsave_jpg(custom_name = "zrt_conditions", width = 9)
 
 # with hihglight
 dsum %>% 
@@ -410,7 +422,7 @@ dsum %>%
   background_grid(major = 'y') +
   theme(legend.position = 'none')
 
-ggsave_jpg(custom_name = "zrt_conditions_hi", width = 9)
+# ggsave_jpg(custom_name = "zrt_conditions_hi", width = 9)
 
 #--------------------------------------------------------
 # log-transformed RTs (not normalised by machine) by deviant (with overlay)
@@ -436,7 +448,7 @@ ggplot(log_sum) + aes(x = factor(deviant), y = mean, group = condition) +
   labs(x = deviant_lab, y = lrt_lab) +
   background_grid(major = 'y')
 
-ggsave_jpg(custom_name = "logrt_conditions", width = 9)
+# ggsave_jpg(custom_name = "logrt_conditions", width = 9)
 
 # with hihglight
 log_sum %>% 
@@ -455,19 +467,15 @@ log_sum %>%
   background_grid(major = 'y') +
   theme(legend.position="none")
 
-ggsave_jpg(custom_name = "logrt_conditions_hi", width = 9)
+# ggsave_jpg(custom_name = "logrt_conditions_hi", width = 9)
 
 #--------------------------------------------------------
 # regression models (logRT_z)
 #--------------------------------------------------------
 
 # saturated model
-mm_sat <- lmer(logRT_z ~ preceding_stds + deviant + condition +
-                 deviant:condition + preceding_stds:condition +
-                 (1|subjectID), d, REML = F)
-# saturated model
 mm_sat <- lmer(logRT_z ~ condition *
-                 (preceding_stds + deviant + deviant_probability) +
+                 (deviant + preceding_stds + deviant_probability) +
                  (1|subjectID), d, REML = F)
 summary(mm_sat)
 
@@ -475,7 +483,7 @@ summary(mm_sat)
 step(mm_sat)
 
 # step-selected final model
-mm_final <- lmer(logRT_z ~ preceding_stds + deviant + deviant_probability +
+mm_final <- lmer(logRT_z ~ deviant + preceding_stds + deviant_probability +
                    condition + condition:deviant_probability +
                    (1|subjectID), d, REML = F)
 summary(mm_final)
@@ -486,8 +494,8 @@ print_model(mm_final)
 #--------------------------------------------------------
 
 # saturated model
-mm_sat_log <- lmer(logRT ~ preceding_stds + deviant + condition +
-                 deviant:condition + preceding_stds:condition +
+mm_sat_log <- lmer(logRT ~ condition *
+                 (deviant + preceding_stds + deviant_probability) +
                  (1|subjectID), d, REML = F)
 summary(mm_sat_log)
 
@@ -495,7 +503,8 @@ summary(mm_sat_log)
 step(mm_sat_log)
 
 # final model
-mm_final_log <- lmer(logRT ~ preceding_stds + deviant + condition +
+mm_final_log <- lmer(logRT ~ deviant + preceding_stds + deviant_probability +
+                       condition + condition:deviant_probability +
                    (1|subjectID), d, REML = F)
 summary(mm_final_log)
 print_model(mm_final_log)
