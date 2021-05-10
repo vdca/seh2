@@ -49,6 +49,13 @@ ggsave_jpg <- function(custom_name = "lastplot", ...) {
   ggsave_pdf(device = 'jpeg', device_suffix = 'jpg', custom_name, ...)
 }
 
+# print table in latex format
+ltx_tbl <- function(mx) {
+  mx %>% 
+    mutate(across(where(is.numeric), ~ round(., digits = 2))) %>% 
+    kable(format = 'latex', booktabs = T, linesep = "")
+}
+
 # print fixed effects of mixed model
 print_model <- function(mx) {
   mx %>% 
@@ -56,22 +63,29 @@ print_model <- function(mx) {
     mutate(signif = stars.pval(p.value),
            t.value = statistic,
            p.value = format.pval(p.value, digits = 2),
-           term = str_replace_all(term, 'preceding_stds', 'preceding_standards')) %>% 
-    mutate_if(is.numeric, ~ round(., digits = 2)) %>% 
+           term = str_replace_all(term, 'deviant', 'dev_position'),
+           term = str_replace_all(term, 'preceding_stds', 'dev_distance')) %>% 
     select(term, estimate, std.error, t.value, p.value, signif) %>% 
-    kable(format = 'latex', booktabs = T, linesep = "")
+    ltx_tbl()
 }
 
+# themes for distribution plots.
+# legend.justification = inside reference point for legend.position 
+theme_dist <- list(theme(legend.title = element_blank(),
+                         legend.position = c(1, 1),
+                         legend.justification = c('right', 'top')))
+theme_dist_nolegend <- list(theme(legend.position = 'none'))
+
 #--------------------------------------------------------
-# load data
+# load data, add condition-level features
 #--------------------------------------------------------
 
 # semantic labels for conditions.
 # machine (hard/soft-ware) for conditions.
 condlabels <- tibble(condition = c(1, 2, 3),
-                     condition_label = c('Cond. 1: constant IOI & ISI',
-                                         'Cond. 2: variable ISI',
-                                         'Cond. 3: variable IOI'),
+                     condition_label = c('Cond. 1: constant ISI & ITI',
+                                         'Cond. 2: variable ITI',
+                                         'Cond. 3: variable ISI'),
                      machine = c('dell_ubuntu12',
                                  'dell_ubuntu12',
                                  'lenovo_ubuntu15'))
@@ -154,6 +168,24 @@ d_perform %>%
   count(condition)
 
 #--------------------------------------------------------
+# accuracy per condition
+#--------------------------------------------------------
+
+acc_cond <- d_perform %>% 
+  group_by(condition, subjectID, itemID, response_type) %>% 
+  nest() %>% 
+  group_by(condition, subjectID) %>% 
+  select(-data) %>% 
+  count(response_type) %>% 
+  mutate(total = sum(n),
+         p = n/total*100) %>% 
+  group_by(condition) %>% 
+  filter(response_type == 'hit') %>% 
+  summarise(accuracy_mean = mean(p),
+            accuracy_sd = sd(p))
+acc_cond
+
+#--------------------------------------------------------
 # exclude all responses except hits
 #--------------------------------------------------------
 
@@ -188,6 +220,20 @@ d_hits <- d_hits %>%
   select(-extreme_lo, -extreme_hi)
 
 #--------------------------------------------------------
+# covariate: deviant probability
+#--------------------------------------------------------
+
+# following anonymous reviewer #4:
+# introduce deviant probability as a covariate.
+# given that 2/3s of the sequences contain a deviant,
+# the overall probability of a sequence containing a deviant is of 2/3.
+# further, the deviant probability for each position within a sequence is:
+# 1st position = 2/3 * 1/8; 2nd = 2/3 * 1/7; 8th = 2/3 * 1/1.
+# that is, the deviant probability increases along the sequence.
+dev_prob <- tibble(deviant = seq(8),
+                   deviant_probability = 2/3 * 1/seq(8, 1))
+
+#--------------------------------------------------------
 # final dataset, add transformed RT features
 #--------------------------------------------------------
 
@@ -196,18 +242,32 @@ d <- d_hits %>%
   group_by(machine) %>% 
   mutate(logRT_z = scale(logRT),
          relRT_z = scale(relRT)) %>% 
-  ungroup()
+  ungroup() %>% 
+  left_join(dev_prob)
+
+# d %>% write_tsv('../data/seh2_processed_data.tsv')
+d <- read_tsv('../data/seh2_processed_data.tsv') %>% 
+  mutate(condition = as_factor(condition))
+
+#--------------------------------------------------------
+# descriptive stats for RTs by condition
+#--------------------------------------------------------
+
+d %>%
+  group_by(condition) %>% 
+  summarise(RT_mean = mean(relRT),
+            RT_sd = sd(relRT),
+            participant_n = n_distinct(subjectID),
+            accurate_RTs = n()) %>% 
+  ungroup() %>% 
+  # summarise(across(where(is.numeric), sum)) %>% 
+  left_join(acc_cond) %>% 
+  ltx_tbl()
+
 
 #--------------------------------------------------------
 # distributions
 #--------------------------------------------------------
-
-# themes for distribution plots.
-# legend.justification = inside reference point for legend.position 
-theme_dist <- list(theme(legend.title = element_blank(),
-                         legend.position = c(1, 1),
-                         legend.justification = c('right', 'top')))
-theme_dist_nolegend <- list(theme(legend.position = 'none'))
 
 # Conditions were conducted on different machines:
 # Condition 1: Dell XPS M1330, Ubuntu 12.04.
@@ -250,15 +310,36 @@ conf_summary(d, relRT, condition_label)
 conf_summary(d, logRT, condition_label)
 conf_summary(d, logRT_z, condition_label)
 
+#--------------------------------------------------------
+# preceding standards
+#--------------------------------------------------------
+
 # distribution of preceding standards, i.e. distance since preceding deviant
 d %>%
+  mutate(condition = as_factor(condition)) %>% 
   ggplot() +
   aes(x = preceding_stds,
       group = condition,
-      fill = as_factor(condition),
-      colour = as_factor(condition)) +
+      fill = condition,
+      colour = condition) +
   geom_density(alpha = .5) +
   theme_dist
+
+d %>%
+  mutate(deviant = as_factor(deviant)) %>%
+  ggplot() +
+  aes(x = deviant, y = preceding_stds) +
+  geom_boxplot()
+
+d %>% 
+  group_by(deviant) %>% 
+  summarise(across(preceding_stds, list(mean=mean, sd=sd)))
+
+# correlation between deviant position and preceding_stds
+cor(d$deviant, d$preceding_stds)
+
+# correlation between preceding_stds and RT
+cor(d$preceding_stds, d$logRT_z)
 
 #--------------------------------------------------------
 # RTs by position of deviant
@@ -382,15 +463,20 @@ ggsave_jpg(custom_name = "logrt_conditions_hi", width = 9)
 
 # saturated model
 mm_sat <- lmer(logRT_z ~ preceding_stds + deviant + condition +
-              deviant:condition + preceding_stds:condition +
-              (1|subjectID), d, REML = F)
+                 deviant:condition + preceding_stds:condition +
+                 (1|subjectID), d, REML = F)
+# saturated model
+mm_sat <- lmer(logRT_z ~ condition *
+                 (preceding_stds + deviant + deviant_probability) +
+                 (1|subjectID), d, REML = F)
 summary(mm_sat)
 
 # model selection
 step(mm_sat)
 
 # step-selected final model
-mm_final <- lmer(logRT_z ~ preceding_stds + deviant +
+mm_final <- lmer(logRT_z ~ preceding_stds + deviant + deviant_probability +
+                   condition + condition:deviant_probability +
                    (1|subjectID), d, REML = F)
 summary(mm_final)
 print_model(mm_final)
