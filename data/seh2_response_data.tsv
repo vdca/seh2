@@ -1,4 +1,4 @@
-subjectID	itemID	deviant	section	absRT	relRT	preceding_stds	ITI	IOI	preIOI	condition
+subjectID	itemID	deviant	section	absRT	relRT	preceding_stds	ITI	ISI	preISI	condition
 1	6	1	block1	0	0	10	1497	300	300	2
 1	6	1	block1	2952	2952	10	1497	300	300	2
 1	7	5	block1	2200	1000	11	1470	300	300	2
