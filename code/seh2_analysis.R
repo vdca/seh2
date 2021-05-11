@@ -349,10 +349,10 @@ d %>%
   summarise(across(preceding_stds, list(mean=mean, sd=sd)))
 
 # correlation between deviant position and preceding_stds
-cor.test(d$deviant, d$preceding_stds)
+cor_test(d, deviant, preceding_stds)
 
 # correlation between preceding_stds and RT
-cor.test(d$preceding_stds, d$logRT_z)
+cor_test(d, preceding_stds, logRT_z)
 
 #--------------------------------------------------------
 # RTs by position of deviant
@@ -399,7 +399,8 @@ dsum %>%
   geom_errorbar(aes(ymin=mean-ci, ymax=mean+ci), width=.1) +
   facet_wrap(~ condition) +
   labs(x = deviant_lab, y = zrt_lab) +
-  stat_cor(p.accuracy = .001, label.x = 4, label.y = 1.1) +
+  stat_cor(label.x = 6, label.y = 1.1, cor.coef.name = 'r',
+           aes(label = ..r.label..)) +
   theme_pubr(legend = 'none') +
   background_grid(major = 'y')
 
