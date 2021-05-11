@@ -499,8 +499,6 @@ mm_final <- lmer(logRT_z ~ deviant + preceding_stds + deviant_probability +
                    (1|subjectID), d, REML = F)
 summary(mm_final)
 print_model(mm_final)
-confint(mm_final, method = 'Wald') %>% 
-  tibble()
 
 #--------------------------------------------------------
 # regression models (logRT)
