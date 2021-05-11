@@ -60,8 +60,17 @@ ltx_tbl <- function(mx) {
 
 # print fixed effects of mixed model
 print_model <- function(mx) {
+  
+  # 95% confidence intervals
+  mx_ci <- confint(mx, method = 'Wald') %>% 
+    as.data.frame() %>% 
+    slice_tail(n = nrow(.)-2) %>% 
+    rownames_to_column('term')
+  colnames(mx_ci) <- c('term', 'lower.CI', 'upper.CI')
+  
   mx %>% 
     tidy(effects = 'fixed') %>% 
+    left_join(mx_ci) %>% 
     mutate(signif = stars.pval(p.value),
            t.value = statistic,
            p.value = p_format(p.value, digits = 1,
@@ -69,7 +78,8 @@ print_model <- function(mx) {
            term = str_replace_all(term, 'deviant_probability', 'dev.probability'),
            term = str_replace_all(term, 'preceding_stds', 'dev.distance'),
            term = str_replace_all(term, 'deviant', 'dev.position')) %>% 
-    select(term, estimate, std.error, t.value, p.value, signif) %>% 
+    select(term, estimate, lower.CI, upper.CI,
+           std.error, t.value, p.value, signif) %>% 
     ltx_tbl() %>% 
     str_replace_all('signif', '') %>% 
     str_replace_all('<', '$<$') %>% # less-than symbol is not well escaped
@@ -489,6 +499,8 @@ mm_final <- lmer(logRT_z ~ deviant + preceding_stds + deviant_probability +
                    (1|subjectID), d, REML = F)
 summary(mm_final)
 print_model(mm_final)
+confint(mm_final, method = 'Wald') %>% 
+  tibble()
 
 #--------------------------------------------------------
 # regression models (logRT)
