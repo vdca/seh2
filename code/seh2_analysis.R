@@ -233,6 +233,14 @@ d_hits <- d_perform %>%
 # extremely low RTs too;
 # define extreme as less/more than 2 SDs from mean;
 # (by machine, because each setup shows different RT lags)
+
+# show lower/upper cut-off thresholds for extreme RTs
+d_hits %>% 
+  group_by(machine) %>%
+  summarise(lower = mean(relRT) - 2*sd(relRT),
+            upper = mean(relRT) + 2*sd(relRT))
+
+# remove extreme
 d_hits <- d_hits %>% 
   group_by(machine) %>% 
   mutate(extreme_lo = relRT < mean(relRT) - 2*sd(relRT),
