@@ -11,6 +11,7 @@ library(skimr)
 library(cowplot)
 theme_set(theme_cowplot())
 library(ggpubr)
+library(ggeffects)
 library(lmerTest)
 library(broom.mixed)
 library(gtools)
@@ -502,11 +503,53 @@ summary(mm_sat)
 step(mm_sat)
 
 # step-selected final model
-mm_final <- lmer(logRT_z ~ deviant + preceding_stds + deviant_probability +
+mm_final <- d %>% 
+  # mutate(condition = condition_label) %>% 
+  lmer(logRT_z ~ deviant + preceding_stds + deviant_probability +
                    condition + condition:deviant_probability +
-                   (1|subjectID), d, REML = F)
+                   (1|subjectID), data = ., REML = F)
 summary(mm_final)
 print_model(mm_final)
+
+#--------------------------------------------------------
+# plot model predictions
+#--------------------------------------------------------
+
+# plot effect of deviant probability
+mm_pred_probability <- ggpredict(mm_final, terms = c('deviant_probability', 'condition'))
+predprob <- ggplot(mm_pred_probability) +
+  aes(x = x, y = predicted, colour = group) +
+  geom_line(size = 1) +
+  xlab('deviant probability') +
+  ylab('reaction time\n(log-transformed, z-normalised)') +
+  theme_dist_nolegend
+  
+# ggsave_jpg('predictions_probability', height = 5)
+
+# plot effect of deviant distance
+mm_pred_distance <- ggpredict(mm_final, terms = c('preceding_stds', 'condition'))
+preddis <- ggplot(mm_pred_distance) +
+  aes(x = x, y = predicted, colour = group) +
+  geom_line(size = 1) +
+  xlab('deviant distance') +
+  ylab('reaction time\n(log-transformed, z-normalised)') +
+  theme_dist_nolegend
+
+# ggsave_jpg('predictions_distance', height = 5)
+
+# plot effect of deviant position
+mm_pred_position <- ggpredict(mm_final, terms = c('deviant', 'condition'))
+predpos <- ggplot(mm_pred_position) +
+  aes(x = x, y = predicted, colour = group) +
+  geom_line(size = 1) +
+  xlab('deviant position') +
+  ylab('reaction time\n(log-transformed, z-normalised)') +
+  theme_dist
+
+# ggsave_jpg('predictions_position', height = 5)
+
+plot_grid(predpos, preddis, predprob, ncol = 1, labels = 'AUTO')
+ggsave_jpg('model_predictions', height = 10)
 
 #--------------------------------------------------------
 # regression models (logRT)
