@@ -52,6 +52,10 @@ ggsave_jpg <- function(custom_name = "lastplot", ...) {
   ggsave_pdf(device = 'jpeg', device_suffix = 'jpg', custom_name, ...)
 }
 
+ggsave_png <- function(custom_name = "lastplot", ...) {
+  ggsave_pdf(device = 'png', device_suffix = 'png', custom_name, ...)
+}
+
 # print table in latex format
 ltx_tbl <- function(mx) {
   mx %>% 
@@ -158,7 +162,20 @@ alld <- alld %>%
          response_type = if_else(n_reactions==1, 'hit', response_type),
          response_type = if_else(n_reactions==0, 'miss', response_type))
 
-# summary of hits, overreactions, misses, false alarms.
+# address overreactions.
+# multiple key presses may be correct responses to a deviant.
+# in any case, keep only the first response for each trial.
+# after doing so, mark all negative RTs as false_alarms,
+# and re-code kept overreactions as legit hits.
+alld <- alld %>% 
+  arrange(subjectID, itemID, absRT) %>% 
+  group_by(subjectID, itemID) %>%
+  slice(1) %>%
+  ungroup() %>% 
+  mutate(response_type = if_else(relRT <= 0, 'false_alarm', response_type, response_type),
+         response_type = if_else(response_type == 'overreaction', 'hit', response_type))
+
+# summary of hits, misses, false alarms.
 alld %>% 
   count(response_type) %>% 
   mutate(total = sum(n),
@@ -202,7 +219,7 @@ acc_cond <- d_perform %>%
   count(response_type) %>% 
   mutate(total = sum(n),
          p = n/total*100) %>%
-  filter(response_type == 'hit') %>%
+  filter(response_type %in% c('hit')) %>%
   group_by(condition_label) %>% 
   summarise(accuracy_mean = mean(p),
             accuracy_sd = sd(p)) %>% 
@@ -222,7 +239,6 @@ d_perform %>%
 # dataset for analyses:
 # only keep hits, i.e. deviant is present and participant reacts once;
 # exclude misses, false_alarms and trials with overreactions.
-# also exclude impossible (i.e. negative) RTs. 
 d_hits <- d_perform %>% 
   filter(response_type == 'hit')
 
@@ -230,27 +246,28 @@ d_hits <- d_perform %>%
 # exlude impossible/extreme RTs
 #--------------------------------------------------------
 
-# negative RTs are equivalent to false alarms;
+# negative RTs are equivalent to false alarms (these have been removed previously);
 # extremely low RTs too;
-# define extreme as less/more than 2 SDs from mean;
-# (by machine, because each setup shows different RT lags)
-
-# show lower/upper cut-off thresholds for extreme RTs
-d_hits %>% 
-  group_by(machine) %>%
-  summarise(lower = mean(relRT) - 2*sd(relRT),
-            upper = mean(relRT) + 2*sd(relRT))
+# define extreme (=outlier) as less/more than 2 SDs from mean;
+# define composite threshold:
+#   - by-subject threshold: subject mean +/- SDs
+#   - by-position threshold: position mean +/- SDs.
+# only exclude if RT exceeds both thresholds.
+# otherwise, too many RTs may be excluded from initial positions.
+# credit: rev4
 
 # remove extreme
 d_hits <- d_hits %>% 
-  group_by(machine) %>% 
+  group_by(subjectID) %>% 
   mutate(extreme_lo = relRT < mean(relRT) - 2*sd(relRT),
          extreme_hi = relRT > mean(relRT) + 2*sd(relRT)) %>% 
-  ungroup() %>%
-  filter(relRT > 0,
-         extreme_lo == F,
-         extreme_hi == F) %>% 
-  select(-extreme_lo, -extreme_hi)
+  group_by(deviant) %>%
+  mutate(extreme_lo_pos = relRT < mean(relRT) - 2*sd(relRT),
+         extreme_hi_pos = relRT > mean(relRT) + 2*sd(relRT)) %>% 
+  ungroup() %>% 
+  filter((extreme_lo == F) | (extreme_lo_pos == F),
+         (extreme_hi == F) | (extreme_hi_pos == F)) %>%
+  select(-starts_with('extreme'))
 
 #--------------------------------------------------------
 # covariate: deviant probability
@@ -286,6 +303,7 @@ d <- read_tsv('../data/seh2_processed_data.tsv') %>%
 # descriptive stats for RTs by condition
 #--------------------------------------------------------
 
+# frontiers: Table S1
 d %>%
   group_by(condition_label) %>% 
   summarise(RT_mean = mean(relRT),
@@ -333,10 +351,11 @@ dist_zrt <- ggplot(d) +
 dist_zrt
 
 plot_grid(dist_rt, dist_zrt, ncol = 1, labels = 'AUTO')
-# ggsave_jpg('rt_distributions_2', height = 9)
+# ggsave_png('rt_distributions_2', height = 9)
+# frontiers: Figure S1
 
 plot_grid(dist_rt, dist_logrt, dist_zrt, ncol = 1, labels = 'AUTO')
-# ggsave_jpg('rt_distributions_3', height = 9)
+# ggsave_png('rt_distributions_3', height = 9)
 
 conf_summary(d, relRT, condition_label)
 conf_summary(d, logRT, condition_label)
@@ -363,9 +382,18 @@ d %>%
   aes(x = deviant, y = preceding_stds) +
   geom_boxplot()
 
+# d %>% 
+#   group_by(deviant) %>% 
+#   summarise(across(preceding_stds, list(mean=mean, sd=sd)))
+
 d %>% 
+  select(deviant, preceding_stds) %>% 
   group_by(deviant) %>% 
-  summarise(across(preceding_stds, list(mean=mean, sd=sd)))
+  skim()
+
+d %>% 
+  select(preceding_stds) %>% 
+  skim()
 
 # correlation between deviant position and preceding_stds
 cor_test(d, deviant, preceding_stds)
@@ -423,7 +451,8 @@ dsum %>%
   theme_pubr(legend = 'none') +
   background_grid(major = 'y')
 
-# ggsave_jpg(custom_name = "zrt_conditions", width = 9)
+# frontiers: figure2
+# ggsave_png(custom_name = "zrt_conditions", width = 9)
 
 # with hihglight
 dsum %>% 
@@ -442,7 +471,7 @@ dsum %>%
   background_grid(major = 'y') +
   theme(legend.position = 'none')
 
-# ggsave_jpg(custom_name = "zrt_conditions_hi", width = 9)
+# ggsave_png(custom_name = "zrt_conditions_hi", width = 9)
 
 #--------------------------------------------------------
 # log-transformed RTs (not normalised by machine) by deviant (with overlay)
@@ -468,7 +497,7 @@ ggplot(log_sum) + aes(x = factor(deviant), y = mean, group = condition) +
   labs(x = deviant_lab, y = lrt_lab) +
   background_grid(major = 'y')
 
-# ggsave_jpg(custom_name = "logrt_conditions", width = 9)
+# ggsave_png(custom_name = "logrt_conditions", width = 9)
 
 # with hihglight
 log_sum %>% 
@@ -487,7 +516,7 @@ log_sum %>%
   background_grid(major = 'y') +
   theme(legend.position="none")
 
-# ggsave_jpg(custom_name = "logrt_conditions_hi", width = 9)
+# ggsave_png(custom_name = "logrt_conditions_hi", width = 9)
 
 #--------------------------------------------------------
 # regression models (logRT_z)
@@ -504,11 +533,12 @@ step(mm_sat)
 
 # step-selected final model
 mm_final <- d %>% 
-  # mutate(condition = condition_label) %>% 
+  mutate(condition = condition_label) %>%
   lmer(logRT_z ~ deviant + preceding_stds + deviant_probability +
                    condition + condition:deviant_probability +
                    (1|subjectID), data = ., REML = F)
 summary(mm_final)
+# frontiers: Table 2
 print_model(mm_final)
 
 #--------------------------------------------------------
@@ -518,38 +548,42 @@ print_model(mm_final)
 # plot effect of deviant probability
 mm_pred_probability <- ggpredict(mm_final, terms = c('deviant_probability', 'condition'))
 predprob <- ggplot(mm_pred_probability) +
-  aes(x = x, y = predicted, colour = group) +
-  geom_line(size = 1) +
+  aes(x = x, y = predicted) +
+  geom_line(aes(colour = group), size = 1) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = group), alpha = .1) +
   xlab('deviant probability') +
   ylab('reaction time\n(log-transformed, z-normalised)') +
   theme_dist_nolegend
   
-# ggsave_jpg('predictions_probability', height = 5)
+# ggsave_png('predictions_probability', height = 5)
 
 # plot effect of deviant distance
 mm_pred_distance <- ggpredict(mm_final, terms = c('preceding_stds', 'condition'))
 preddis <- ggplot(mm_pred_distance) +
-  aes(x = x, y = predicted, colour = group) +
-  geom_line(size = 1) +
+  aes(x = x, y = predicted) +
+  geom_line(aes(colour = group), size = 1) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = group), alpha = .1) +
   xlab('deviant distance') +
   ylab('reaction time\n(log-transformed, z-normalised)') +
   theme_dist_nolegend
 
-# ggsave_jpg('predictions_distance', height = 5)
+# ggsave_png('predictions_distance', height = 5)
 
 # plot effect of deviant position
 mm_pred_position <- ggpredict(mm_final, terms = c('deviant', 'condition'))
 predpos <- ggplot(mm_pred_position) +
-  aes(x = x, y = predicted, colour = group) +
-  geom_line(size = 1) +
+  aes(x = x, y = predicted) +
+  geom_line(aes(colour = group), size = 1) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = group), alpha = .1) +
   xlab('deviant position') +
   ylab('reaction time\n(log-transformed, z-normalised)') +
   theme_dist
 
-# ggsave_jpg('predictions_position', height = 5)
+# ggsave_png('predictions_position', height = 5)
 
 plot_grid(predpos, preddis, predprob, ncol = 1, labels = 'AUTO')
-ggsave_jpg('model_predictions', height = 10)
+# ggsave_png('model_predictions', height = 12)
+# frontiers: Figure S2
 
 #--------------------------------------------------------
 # regression models (logRT)
