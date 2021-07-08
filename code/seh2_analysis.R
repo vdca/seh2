@@ -105,9 +105,9 @@ theme_dist_nolegend <- list(theme(legend.position = 'none'))
 # semantic labels for conditions.
 # machine (hard/soft-ware) for conditions.
 condlabels <- tibble(condition = c(1, 2, 3),
-                     condition_label = c('Cond. 1: constant ISI & ITI',
-                                         'Cond. 2: variable ITI',
-                                         'Cond. 3: variable ISI'),
+                     condition_label = c('1: constant ISI & ITI',
+                                         '2: variable ITI',
+                                         '3: variable ISI'),
                      machine = c('dell_ubuntu12',
                                  'dell_ubuntu12',
                                  'lenovo_ubuntu15'))
@@ -148,7 +148,7 @@ alld <- alld %>%
 # n_reactions = 0 = missed deviants
 # n_reactions = 1 = hits
 # n_reactions > 1 = overreactions, multiple reactions to single deviant
-# n_reactions = 99 (arbitrary code; when deviant absent) = false alarm
+# n_reactions = -1 (arbitrary code; when deviant absent) = false alarm
 alld <- alld %>% 
   group_by(subjectID, itemID) %>% 
   nest() %>% 
@@ -211,7 +211,8 @@ alld %>%
 # accuracy per condition
 #--------------------------------------------------------
 
-acc_cond <- d_perform %>%
+# accuracy (=proportion of hits) by subject
+acc_subj <- d_perform %>%
   group_by(condition_label, subjectID, itemID, response_type) %>% 
   nest() %>% 
   group_by(condition_label, subjectID) %>% 
@@ -219,7 +220,11 @@ acc_cond <- d_perform %>%
   count(response_type) %>% 
   mutate(total = sum(n),
          p = n/total*100) %>%
-  filter(response_type %in% c('hit')) %>%
+  ungroup() %>% 
+  filter(response_type %in% c('hit'))
+
+# accuracy by condition
+acc_cond <- acc_subj %>%
   group_by(condition_label) %>% 
   summarise(accuracy_mean = mean(p),
             accuracy_sd = sd(p)) %>% 
@@ -287,6 +292,7 @@ dev_prob <- tibble(deviant = seq(8),
 # final dataset, add transformed RT features
 #--------------------------------------------------------
 
+# scale() = center values, & normalise them (dividing by SD)
 d <- d_hits %>% 
   mutate(logRT = log(relRT)) %>% 
   group_by(machine) %>% 
@@ -296,8 +302,8 @@ d <- d_hits %>%
   left_join(dev_prob)
 
 # d %>% write_tsv('../data/seh2_processed_data.tsv')
-d <- read_tsv('../data/seh2_processed_data.tsv') %>% 
-  mutate(condition = as_factor(condition))
+# d <- read_tsv('../data/seh2_processed_data.tsv') %>% 
+#   mutate(condition = as_factor(condition))
 
 #--------------------------------------------------------
 # descriptive stats for RTs by condition
@@ -306,13 +312,14 @@ d <- read_tsv('../data/seh2_processed_data.tsv') %>%
 # frontiers: Table S1
 d %>%
   group_by(condition_label) %>% 
-  summarise(RT_mean = mean(relRT),
-            RT_sd = sd(relRT),
+  summarise(RT_mean = mean(relRT) %>% round(0),
+            RT_sd = sd(relRT) %>% round(0),
             participant_n = n_distinct(subjectID),
             sample_size = n()) %>% 
   ungroup() %>% 
   # summarise(across(where(is.numeric), sum)) %>% 
   left_join(acc_cond) %>% 
+  mutate(accuracy_mean = round(accuracy_mean, 1)) %>% 
   ltx_tbl()
 
 #--------------------------------------------------------
@@ -605,5 +612,23 @@ mm_final_log <- lmer(logRT ~ deviant + preceding_stds + deviant_probability +
 summary(mm_final_log)
 print_model(mm_final_log)
 
+#--------------------------------------------------------
+# regression model (accuracy)
+#--------------------------------------------------------
+
+# binary response accuracy as dependent variable (correct vs incorrect)
+d_acc <- d_perform %>% 
+  mutate(accurate = response_type == 'hit')
+
+# logistic regression model
+mm_sat_acc <- glmer(accurate ~ condition + (1|subjectID),
+                    family = 'binomial', d_acc)
+summary(mm_sat_acc)
+
+# compare model with condition as predictor
+# to null model without condition
+mm_sat_acc_null <- glmer(accurate ~ (1|subjectID),
+                    family = 'binomial', d_acc)
+anova(mm_sat_acc, mm_sat_acc_null)
 
 
