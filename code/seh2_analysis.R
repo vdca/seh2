@@ -296,6 +296,7 @@ dev_prob <- tibble(deviant = seq(8),
 d <- d_hits %>% 
   mutate(logRT = log(relRT)) %>% 
   group_by(machine) %>% 
+  # group_by(subjectID) %>%
   mutate(logRT_z = scale(logRT),
          relRT_z = scale(relRT)) %>% 
   ungroup() %>% 
@@ -613,12 +614,13 @@ summary(mm_final_log)
 print_model(mm_final_log)
 
 #--------------------------------------------------------
-# regression model (accuracy)
+# regression model: accuracy, only condition as predictor
 #--------------------------------------------------------
 
 # binary response accuracy as dependent variable (correct vs incorrect)
 d_acc <- d_perform %>% 
-  mutate(accurate = response_type == 'hit')
+  mutate(accurate = response_type == 'hit') %>% 
+  left_join(dev_prob)
 
 # logistic regression model
 mm_sat_acc <- glmer(accurate ~ condition + (1|subjectID),
@@ -630,5 +632,19 @@ summary(mm_sat_acc)
 mm_sat_acc_null <- glmer(accurate ~ (1|subjectID),
                     family = 'binomial', d_acc)
 anova(mm_sat_acc, mm_sat_acc_null)
+
+#--------------------------------------------------------
+# regression model: accuracy, all predictors
+#--------------------------------------------------------
+
+# logistic regression model
+mm_sat_acc_2 <- glmer(accurate ~ condition +
+                      deviant + preceding_stds + deviant_probability +
+                      (1|subjectID),
+                    family = 'binomial', d_acc)
+summary(mm_sat_acc_2)
+
+print_model(mm_sat_acc_2)
+
 
 
