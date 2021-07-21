@@ -13,6 +13,7 @@ theme_set(theme_cowplot())
 library(ggpubr)
 library(ggeffects)
 library(lmerTest)
+library(LMERConvenienceFunctions)
 library(broom.mixed)
 library(gtools)
 library(kableExtra)
@@ -634,17 +635,22 @@ mm_sat_acc_null <- glmer(accurate ~ (1|subjectID),
 anova(mm_sat_acc, mm_sat_acc_null)
 
 #--------------------------------------------------------
-# regression model: accuracy, all predictors
+# regression model: accuracy
 #--------------------------------------------------------
 
-# logistic regression model
-mm_sat_acc_2 <- glmer(accurate ~ condition +
-                      deviant + preceding_stds + deviant_probability +
+# logistic regression model.
+mm_sat_acc_2 <- glmer(accurate ~ condition *
+                      (deviant + preceding_stds + deviant_probability) +
                       (1|subjectID),
                     family = 'binomial', d_acc)
-summary(mm_sat_acc_2)
 
-print_model(mm_sat_acc_2)
+# accuracy_step <- cAIC4::stepcAIC(mm_sat_acc_2,
+#                      direction = "both", trace = T, data = d_acc)
 
+# stepwise selection (back+forward) of accuracy model
+accuracy_step <- fitLMER.fnc(model = mm_sat_acc_2,
+                 method = 'AIC',
+                 backfit.on = 't',
+                 ran.effects = list(ran.intercepts = "subjectID"))
 
-
+summary(accuracy_step)
