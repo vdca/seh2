@@ -2,7 +2,7 @@
 
 This repository contains supplementary code and data for the following paper:
 
-Arrazola, V. DC. Deviants are detected faster at the end of verse-like sound sequences.
+Arrazola, V. DC. (2021). Deviants are detected faster at the end of verse-like sound sequences. *Frontiers in psychology*, 12, 614872. https://doi.org/10.3389/fpsyg.2021.614872
 
 ## Files
 
